@@ -300,6 +300,13 @@ static void on_accept(void *ctx, int fd, unsigned ev)
     }
     s->client = c;
     cg_bus_emitf(s->bus, CG_EV_CLIENT, "gdb", "attached %s", peer);
+    /* All-stop gdb expects a halted target on connect (gdbserver and OpenOCD
+     * halt on attach); while it runs the hub holds gdb's qSupported and gdb
+     * gives up after its 2 s remotetimeout. */
+    if (cg_target_state(s->target) == CG_TS_RUNNING) {
+        cg_bus_emitf(s->bus, CG_EV_NOTE, "gdb", "halting running target for gdb attach");
+        cg_target_interrupt(s->target, "gdb");
+    }
 }
 
 static void on_link(void *ctx, const cg_event_t *ev)

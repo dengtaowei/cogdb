@@ -263,6 +263,19 @@ def main(cogdb):
         hub.wait_status("gdb", "-")
         hub.wait_status("state", "running")
         c.ok(True, "detach resumes the target (default policy)")
+
+        g = GdbClient(hub.gdb_port)
+        g.s.settimeout(2)  # gdb's default remotetimeout
+        try:
+            sup = g.packet(b"qSupported:multiprocess+")
+            stop = g.packet(b"?")
+        except OSError as e:
+            sup = stop = repr(e).encode()
+        c.ok(b"PacketSize" in sup and stop[:1] in (b"S", b"T") and
+             hub.status()["state"] == "stopped",
+             "gdb attaching to a running target halts it first", repr(sup) + repr(stop))
+        g.close()
+        hub.wait_status("gdb", "-")
         hub.ctl("HALT 2000")
 
         r = hub.ctl("BREAK 0x1000")
