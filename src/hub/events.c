@@ -18,8 +18,14 @@ typedef struct {
 
 typedef struct {
     cg_ev_type_t type;
+    uint64_t seq;
     char *line;
 } ring_ent_t;
+
+typedef struct {
+    ring_ent_t *ent;
+    size_t cap, head, n;
+} ring_t;
 
 struct cg_bus {
     sub_t *subs;
@@ -29,8 +35,9 @@ struct cg_bus {
     int dirty;
     uint64_t seq;
     uint64_t t0;
-    ring_ent_t *ring;
-    size_t ring_cap, ring_head, ring_n;
+    /* Packets get their own ring so a load's traffic cannot push the
+     * notes, stops and attaches out of history. */
+    ring_t ring[2];
 };
 
 static const char *const k_names[CG_EV__COUNT] = {
@@ -77,12 +84,15 @@ cg_bus_t *cg_bus_new(size_t ring_cap)
     cg_bus_t *b = calloc(1, sizeof(*b));
     if (!b)
         return NULL;
-    b->ring_cap = ring_cap ? ring_cap : 1;
-    b->ring = calloc(b->ring_cap, sizeof(*b->ring));
     b->t0 = cg_now_ns();
-    if (!b->ring) {
-        free(b);
-        return NULL;
+    for (int r = 0; r < 2; r++) {
+        b->ring[r].cap = ring_cap ? ring_cap : 1;
+        b->ring[r].ent = calloc(b->ring[r].cap, sizeof(ring_ent_t));
+        if (!b->ring[r].ent) {
+            free(b->ring[0].ent);
+            free(b);
+            return NULL;
+        }
     }
     return b;
 }
@@ -91,9 +101,11 @@ void cg_bus_free(cg_bus_t *b)
 {
     if (!b)
         return;
-    for (size_t i = 0; i < b->ring_cap; i++)
-        free(b->ring[i].line);
-    free(b->ring);
+    for (int r = 0; r < 2; r++) {
+        for (size_t i = 0; i < b->ring[r].cap; i++)
+            free(b->ring[r].ent[i].line);
+        free(b->ring[r].ent);
+    }
     free(b->subs);
     free(b);
 }
@@ -177,16 +189,18 @@ static void ring_add(cg_bus_t *b, const cg_event_t *ev)
     cg_buf_t line;
     cg_buf_init(&line);
     format_limited(b, ev, &line, RING_LINE_MAX);
-    size_t slot = (b->ring_head + b->ring_n) % b->ring_cap;
-    if (b->ring_n == b->ring_cap) {
-        slot = b->ring_head;
-        b->ring_head = (b->ring_head + 1) % b->ring_cap;
+    ring_t *r = &b->ring[ev->type == CG_EV_PACKET];
+    size_t slot = (r->head + r->n) % r->cap;
+    if (r->n == r->cap) {
+        slot = r->head;
+        r->head = (r->head + 1) % r->cap;
     } else {
-        b->ring_n++;
+        r->n++;
     }
-    free(b->ring[slot].line);
-    b->ring[slot].type = ev->type;
-    b->ring[slot].line = line.data;
+    free(r->ent[slot].line);
+    r->ent[slot].type = ev->type;
+    r->ent[slot].seq = ev->seq;
+    r->ent[slot].line = line.data;
 }
 
 void cg_bus_publish(cg_bus_t *b, cg_event_t *ev)
@@ -226,25 +240,50 @@ void cg_bus_packet(cg_bus_t *b, const char *origin, char dir, const char *data, 
     cg_bus_publish(b, &ev);
 }
 
-int cg_bus_history(cg_bus_t *b, size_t n, unsigned mask, cg_buf_t *out)
+/* Index of the oldest of the last n entries matching mask, scanning back. */
+static size_t ring_start(const ring_t *r, size_t n, unsigned mask)
 {
-    size_t matched = 0;
-    for (size_t i = b->ring_n; i-- > 0 && matched < n;) {
-        ring_ent_t *e = &b->ring[(b->ring_head + i) % b->ring_cap];
-        if (mask & CG_EVM(e->type))
+    size_t i = r->n, matched = 0;
+    while (i > 0 && matched < n) {
+        i--;
+        if (mask & CG_EVM(r->ent[(r->head + i) % r->cap].type))
             matched++;
     }
-    size_t skip = 0;
-    for (size_t i = b->ring_n; i-- > 0;) {
-        ring_ent_t *e = &b->ring[(b->ring_head + i) % b->ring_cap];
-        if ((mask & CG_EVM(e->type)) && ++skip == matched) {
-            for (size_t j = i; j < b->ring_n; j++) {
-                ring_ent_t *f = &b->ring[(b->ring_head + j) % b->ring_cap];
-                if (mask & CG_EVM(f->type))
-                    cg_buf_puts(out, f->line);
-            }
+    return matched ? i : r->n;
+}
+
+static const ring_ent_t *ring_next(const ring_t *r, size_t *i, unsigned mask)
+{
+    for (; *i < r->n; (*i)++) {
+        const ring_ent_t *e = &r->ent[(r->head + *i) % r->cap];
+        if (mask & CG_EVM(e->type))
+            return e;
+    }
+    return NULL;
+}
+
+int cg_bus_history(cg_bus_t *b, size_t n, unsigned mask, cg_buf_t *out)
+{
+    /* Up to n from each ring, merged by seq; the oldest surplus is dropped. */
+    size_t i[2] = {ring_start(&b->ring[0], n, mask), ring_start(&b->ring[1], n, mask)};
+    size_t total = 0;
+    for (int r = 0; r < 2; r++)
+        for (size_t k = i[r]; k < b->ring[r].n; k++)
+            if (mask & CG_EVM(b->ring[r].ent[(b->ring[r].head + k) % b->ring[r].cap].type))
+                total++;
+    size_t skip = total > n ? total - n : 0;
+    for (;;) {
+        const ring_ent_t *a = ring_next(&b->ring[0], &i[0], mask);
+        const ring_ent_t *p = ring_next(&b->ring[1], &i[1], mask);
+        if (!a && !p)
             break;
-        }
+        int take_p = p && (!a || p->seq < a->seq);
+        const ring_ent_t *e = take_p ? p : a;
+        i[take_p]++;
+        if (skip)
+            skip--;
+        else
+            cg_buf_puts(out, e->line);
     }
     return 0;
 }

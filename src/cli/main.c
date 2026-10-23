@@ -40,6 +40,9 @@ static void usage(FILE *fp)
             "      --record FILE         append every packet and event as JSON Lines\n"
             "      --timeout MS          stub reply timeout (default 10000)\n"
             "      --big-endian          target registers are big-endian\n"
+            "      --flow-script FILE    gdb script defining flows (user commands)\n"
+            "      --flows NAME,...      flows agents may run from that script\n"
+            "      --flow-gdb PATH       gdb used to run flows (default gdb)\n"
             "  -v, --verbose             debug logging\n"
             "\n"
             "levels: read < halt < run < write\n"
@@ -58,6 +61,7 @@ static void usage(FILE *fp)
             "  break ADDR [sw|hw|write|read|access] [KIND] | unbreak ... | breaks\n"
             "  monitor TEXT | raw PACKET | kick | reconnect | shutdown\n"
             "  exec GDB-COMMAND   (in the user's gdb, after: new-ui mi PATH)\n"
+            "  flow NAME [keep|resume]   (batch gdb runs a --flows command)\n"
             "\n"
             "event TYPES: comma list of link,client,run,stop,console,note,packet, or all\n");
 }
@@ -73,6 +77,9 @@ static int serve_main(int argc, char **argv)
         OPT_RECORD,
         OPT_TIMEOUT,
         OPT_BIG,
+        OPT_FLOW_SCRIPT,
+        OPT_FLOWS,
+        OPT_FLOW_GDB,
     };
     static const struct option opts[] = {
         {"stub", required_argument, NULL, 's'},
@@ -86,6 +93,9 @@ static int serve_main(int argc, char **argv)
         {"record", required_argument, NULL, OPT_RECORD},
         {"timeout", required_argument, NULL, OPT_TIMEOUT},
         {"big-endian", no_argument, NULL, OPT_BIG},
+        {"flow-script", required_argument, NULL, OPT_FLOW_SCRIPT},
+        {"flows", required_argument, NULL, OPT_FLOWS},
+        {"flow-gdb", required_argument, NULL, OPT_FLOW_GDB},
         {"verbose", no_argument, NULL, 'v'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
@@ -132,6 +142,9 @@ static int serve_main(int argc, char **argv)
             cfg.timeout_ms = (unsigned)v;
             break;
         case OPT_BIG: cfg.big_endian = 1; break;
+        case OPT_FLOW_SCRIPT: cfg.flow.script = optarg; break;
+        case OPT_FLOWS: cfg.flow.names = optarg; break;
+        case OPT_FLOW_GDB: cfg.flow.gdb = optarg; break;
         case 'v': cg_log_level = CG_LOG_DEBUG; break;
         case 'h': usage(stdout); return 0;
         default: return 2;
@@ -193,6 +206,8 @@ static int timeout_for(const char *verb, const char *args)
 {
     if (!strcasecmp(verb, "monitor") || !strcasecmp(verb, "exec"))
         return 130000;
+    if (!strcasecmp(verb, "flow"))
+        return 310000;
     if (!strcasecmp(verb, "wait") || !strcasecmp(verb, "halt") || !strcasecmp(verb, "cont")) {
         long ms = args && *args ? strtol(args, NULL, 10) : 0;
         if (ms <= 0)

@@ -55,6 +55,7 @@ Before a command runs, the hub checks:
 | `MONITOR TEXT` | write | idle | `OK` + monitor output                        |
 | `RAW PACKET` | write | idle  | `OK bytes=N` + reply (non-printables `\xNN`)  |
 | `EXEC GDB-COMMAND` | read/write | | `OK` + gdb output, or `ERR gdb:` + message |
+| `FLOW NAME [keep\|resume]` | write | link | `OK rc=0` or `ERR flow failed rc=N`, + gdb output |
 | `KICK`    | write |         | `OK kicked` (drops the gdb client)             |
 | `RECONNECT` | write |       | `OK link=up\|down`                             |
 | `SHUTDOWN` | write |        | `OK shutting down`                             |
@@ -106,10 +107,14 @@ lists everything. With no target description, the reply is `g=<raw hex>`.
 ### STATUS keys
 
 `name stub link state run_owner last_stop gdb gdb_port detach agent_level
-policy grant gdb_mi gdb_mi_path queue arch registers packet_size
+policy grant gdb_mi gdb_mi_path flows flow queue arch registers packet_size
 agent_breakpoints events record`
 
-`gdb_mi` is `waiting`, `attached` or `busy`.
+`gdb_mi` is `waiting`, `attached` or `busy`. `flows` is the allowed list
+(`-` when flows are off) and `flow` is `idle` or `running`.
+
+`EVENTS N` returns the last N matching events. Packets are kept in a
+separate ring, so packet traffic does not evict other events.
 
 ### Events
 

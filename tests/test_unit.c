@@ -268,7 +268,7 @@ static void count_all(void *ctx, const cg_event_t *ev)
 
 static void test_bus(void)
 {
-    cg_bus_t *b = cg_bus_new(4);
+    cg_bus_t *b = cg_bus_new(3);
     counter_t once = {0}, every = {0};
     once.bus = b;
     once.self_id = cg_bus_subscribe(b, CG_EVM(CG_EV_STOP), count_stop, &once);
@@ -285,7 +285,7 @@ static void test_bus(void)
     cg_buf_t h;
     cg_buf_init(&h);
     cg_bus_history(b, 10, CG_EVM_DEFAULT, &h);
-    /* ring holds 4: stop, stop, packet, note; packet filtered out */
+    /* 3 non-packet slots: stop, stop, note; the packet has its own ring */
     CHECK(strstr(h.data, " run ") == NULL);
     CHECK(strstr(h.data, "signal=2") != NULL);
     CHECK(strstr(h.data, "packet") == NULL);
@@ -293,6 +293,18 @@ static void test_bus(void)
     cg_buf_reset(&h);
     cg_bus_history(b, 1, CG_EVM(CG_EV_STOP), &h);
     CHECK(strstr(h.data, "signal=2") && !strstr(h.data, "signal=5"));
+    for (int i = 0; i < 10; i++)
+        cg_bus_packet(b, "gdb", '>', "m0,4", 4);
+    cg_buf_reset(&h);
+    cg_bus_history(b, 10, CG_EVM_DEFAULT, &h);
+    CHECK(strstr(h.data, "signal=2") != NULL);
+    cg_buf_reset(&h);
+    cg_bus_history(b, 2, CG_EVM_ALL, &h);
+    CHECK(strstr(h.data, "m0,4") && !strstr(h.data, "line"));
+    cg_buf_reset(&h);
+    cg_bus_history(b, 10, CG_EVM_ALL, &h);
+    CHECK(strstr(h.data, "signal=2") && strstr(h.data, "line") > strstr(h.data, "signal=2") &&
+          strstr(h.data, "m0,4") > strstr(h.data, "line"));
     cg_buf_free(&h);
 
     unsigned m;

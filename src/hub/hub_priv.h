@@ -35,6 +35,7 @@ struct cg_hub {
     cg_gdbseat_t *seat;
     cg_grant_t *grant;
     cg_miseat_t *mi;
+    cg_flow_t *flow;
     cg_ctl_t *ctl;
     cg_recorder_t *rec;
     uint64_t link_sub;

@@ -1,6 +1,7 @@
 #ifndef CG_HUB_H
 #define CG_HUB_H
 
+#include "flow.h"
 #include "gdbseat.h"
 #include "policy.h"
 
@@ -10,6 +11,7 @@ typedef struct {
     cg_gdbseat_cfg_t gdb;
     cg_policy_t policy;
     const char *record_path; /* NULL = off */
+    cg_flow_cfg_t flow;
     unsigned timeout_ms;
     int big_endian;
 } cg_hub_cfg_t;

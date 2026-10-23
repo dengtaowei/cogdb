@@ -27,6 +27,7 @@ struct cg_gdbseat {
     int port;
     uint64_t sub;
     client_t *client;
+    int detach_once; /* cg_detach_t for the current client's detach, or -1 */
 };
 
 struct client {
@@ -122,14 +123,15 @@ static int local_nonstop(client_t *c, const char *p, size_t n)
 static int local_detach(client_t *c, const char *p, size_t n)
 {
     cg_gdbseat_t *s = c->seat;
-    if (s->cfg.detach == CG_DETACH_FORWARD)
+    cg_detach_t mode = s->detach_once >= 0 ? (cg_detach_t)s->detach_once : s->cfg.detach;
+    if (mode == CG_DETACH_FORWARD)
         return 0;
     int is_kill = p[0] == 'k' || cg_rsp_starts(p, n, "vKill;");
     if (p[0] != 'k') /* bare k expects no answer; D and vKill do */
         send_str(c, "OK");
     cg_bus_emitf(s->bus, CG_EV_NOTE, "gdb", "%s answered by hub (%s)",
-                 is_kill ? "kill" : "detach", cg_detach_name(s->cfg.detach));
-    if (s->cfg.detach == CG_DETACH_RESUME && cg_target_state(s->target) == CG_TS_STOPPED)
+                 is_kill ? "kill" : "detach", cg_detach_name(mode));
+    if (mode == CG_DETACH_RESUME && cg_target_state(s->target) == CG_TS_STOPPED)
         cg_target_submit(s->target, "hub", "c", 1, NULL, NULL);
     return 1;
 }
@@ -253,8 +255,10 @@ static void client_free(client_t *c)
 {
     cg_gdbseat_t *s = c->seat;
     cg_target_forget(s->target, c);
-    if (s->client == c)
+    if (s->client == c) {
         s->client = NULL;
+        s->detach_once = -1;
+    }
     if (c->busy) {
         c->dead = 1;
         return;
@@ -383,6 +387,7 @@ cg_gdbseat_t *cg_gdbseat_new(cg_loop_t *loop, cg_bus_t *bus, cg_target_t *t,
     s->bus = bus;
     s->target = t;
     s->cfg = *cfg;
+    s->detach_once = -1;
     if (!s->cfg.host)
         s->cfg.host = "127.0.0.1";
     s->listen_fd = listen_tcp(s->cfg.host, cfg->port, &s->port);
@@ -449,4 +454,9 @@ const char *cg_detach_name(cg_detach_t d)
     case CG_DETACH_FORWARD: return "forward";
     }
     return "?";
+}
+
+void cg_gdbseat_detach_once(cg_gdbseat_t *s, cg_detach_t mode)
+{
+    s->detach_once = (int)mode;
 }

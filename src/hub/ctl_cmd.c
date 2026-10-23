@@ -241,6 +241,11 @@ static cg_call_rc_t cmd_status(cg_hub_t *h, cg_call_t *call, const char *args)
                       cg_miseat_path(h->mi));
     else
         cg_buf_puts(out, "gdb_mi=-\n");
+    if (cg_flow_enabled(h->flow))
+        cg_buf_printf(out, "flows=%s\nflow=%s\n", cg_flow_names(h->flow),
+                      cg_flow_busy(h->flow) ? "running" : "idle");
+    else
+        cg_buf_puts(out, "flows=-\n");
     cg_buf_printf(out, "queue=%zu\narch=%s\nregisters=%zu\npacket_size=%u\nagent_breakpoints=%d\n",
                   cg_target_queue_len(h->target), td && td->arch[0] ? td->arch : "-",
                   td ? td->n : 0, cg_target_caps(h->target)->packet_size, h->nbps);
@@ -1034,6 +1039,52 @@ static cg_call_rc_t cmd_exec(cg_hub_t *h, cg_call_t *call, const char *args)
     return CG_CALL_PENDING;
 }
 
+/* ---- flows: user-defined gdb commands run by a batch gdb ---------------- */
+
+#define FLOW_TIMEOUT_MS 300000
+
+static void flow_done(void *ctx, int rc, const char *text, size_t n)
+{
+    cg_call_t *call = ctx;
+    cg_buf_t *out = cg_call_out(call);
+    if (rc == 0)
+        cg_buf_puts(out, "OK rc=0\n");
+    else
+        cg_buf_printf(out, "ERR flow failed rc=%d\n", rc);
+    cg_buf_append(out, text, n);
+    if (n && text[n - 1] != '\n')
+        cg_buf_putc(out, '\n');
+    cg_call_finish(call);
+}
+
+static cg_call_rc_t cmd_flow(cg_hub_t *h, cg_call_t *call, const char *args)
+{
+    char name[64], after[16] = "keep";
+    const char *p = args;
+    if (!tok(&p, name, sizeof(name)))
+        return err(call, "usage: FLOW NAME [keep|resume]");
+    tok(&p, after, sizeof(after));
+    cg_detach_t mode;
+    if (cg_detach_parse(after, &mode) || mode == CG_DETACH_FORWARD)
+        return err(call, "usage: FLOW NAME [keep|resume]");
+    if (!cg_flow_enabled(h->flow))
+        return err(call, "no flows: start the hub with --flow-script FILE --flows NAME,...");
+    if (!cg_flow_allowed(h->flow, name)) {
+        cg_buf_printf(cg_call_out(call), "ERR unknown flow '%s'; allowed: %s\n", name,
+                      cg_flow_names(h->flow));
+        return CG_CALL_DONE;
+    }
+    if (cg_gdbseat_attached(h->seat))
+        return err(call, "a gdb is attached; flows need the seat (in that gdb use EXEC)");
+    cg_gdbseat_detach_once(h->seat, mode);
+    switch (cg_flow_start(h->flow, name, cg_gdbseat_port(h->seat), FLOW_TIMEOUT_MS, flow_done,
+                          call)) {
+    case 0: return CG_CALL_PENDING;
+    case -2: return err(call, "busy: a flow is already running");
+    default: return err(call, "cannot start gdb for the flow (see hub log)");
+    }
+}
+
 /* ---- hub management ---------------------------------------------------- */
 
 static cg_call_rc_t cmd_kick(cg_hub_t *h, cg_call_t *call, const char *args)
@@ -1091,6 +1142,7 @@ const cg_cmd_t cg_commands[] = {
     {"MONITOR", L(WRITE), N(IDLE), CG_ARGS_REQ, cmd_monitor, "MONITOR TEXT"},
     {"RAW", L(WRITE), N(IDLE), CG_ARGS_REQ, cmd_raw, "RAW PACKET"},
     {"EXEC", L(READ), 0, CG_ARGS_REQ, cmd_exec, "EXEC GDB-COMMAND"},
+    {"FLOW", L(WRITE), N(LINK), CG_ARGS_REQ, cmd_flow, "FLOW NAME [keep|resume]"},
     {"KICK", L(WRITE), 0, CG_ARGS_NONE, cmd_kick, "KICK"},
     {"RECONNECT", L(WRITE), 0, CG_ARGS_NONE, cmd_reconnect, "RECONNECT"},
     {"SHUTDOWN", L(WRITE), 0, CG_ARGS_NONE, cmd_shutdown, "SHUTDOWN"},

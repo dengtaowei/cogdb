@@ -115,6 +115,42 @@ def mi_checks(c, hub, exe):
         gdb.close()
 
 
+FLOWS = """
+define set_counter
+  file {exe}
+  set var counter = 42
+  print counter
+end
+define broken
+  print nosuch_symbol
+end
+define not_listed
+  print 1
+end
+"""
+
+
+def flow_checks(c, hub, syms):
+    st = hub.status()
+    c.ok(st.get("flows") == "set_counter,broken" and st.get("flow") == "idle",
+         "STATUS lists the allowed flows", str(st))
+    r = hub.ctl("FLOW set_counter")
+    c.ok(r.startswith("OK rc=0") and re.search(r"\$\d+ = 42", r) is not None,
+         "flow runs the user's command in a batch gdb", r)
+    c.ok(hub.status()["state"] == "stopped", "flow leaves the target halted by default")
+    r = hub.ctl(f"MEM {syms['counter']:#x} 4")
+    c.ok("2a000000" in r, "the flow's write reached the target", r)
+    r = hub.ctl("FLOW broken")
+    c.ok(r.startswith("ERR flow failed rc=") and "nosuch_symbol" in r,
+         "a failing flow reports gdb's error and exit status", r)
+    r = hub.ctl("FLOW not_listed")
+    c.ok(r.startswith("ERR unknown flow") and "set_counter,broken" in r,
+         "flows off the list are refused", r)
+    ev = hub.ctl("EVENTS 200 note")
+    c.ok("flow set_counter started" in ev and "flow set_counter ended rc=0" in ev,
+         "flows are logged", ev)
+
+
 def main(cogdb):
     c = Checker()
     work = tempfile.TemporaryDirectory(prefix="cogdb-e2e-")
@@ -127,7 +163,11 @@ def main(cogdb):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     record = os.path.join(work.name, "session.jsonl")
-    hub = Hub(cogdb, f":{stub_port}", extra=("--record", record))
+    flows = os.path.join(work.name, "flows.gdb")
+    with open(flows, "w") as fp:
+        fp.write("set confirm off\n" + FLOWS.format(exe=exe))
+    hub = Hub(cogdb, f":{stub_port}", extra=("--record", record, "--flow-script", flows,
+                                             "--flows", "set_counter,broken"))
     try:
         hub.wait_status("state", "stopped")
         r = hub.ctl("REGS rip,rsp")
@@ -196,6 +236,9 @@ def main(cogdb):
         c.ok(r.startswith("OK stopped") and r2.startswith("OK"), "agent alone again", r + r2)
 
         mi_checks(c, hub, exe)
+        hub.wait_status("gdb", "-")
+        hub.ctl("HALT 3000")
+        flow_checks(c, hub, syms)
 
         ev = hub.ctl("EVENTS 100")
         for needle in ("client gdb attached", "run gdb", "note agent interrupt",

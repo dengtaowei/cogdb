@@ -127,6 +127,25 @@ cannot change while an agent command runs. The channel closes when your
 gdb exits; the hub offers a fresh one at the same path. It needs no Python
 in gdb.
 
+### Flows
+
+Procedures such as loading firmware belong to the project, not to cogdb.
+Define them as gdb user commands in a script and list the ones agents may
+run:
+
+```
+cogdb serve --stub 127.0.0.1:1025 --name myboard \
+  --flow-gdb riscv64-unknown-elf-gdb \
+  --flow-script examples/board-flows.gdb --flows load_fw,where_fw
+```
+
+`cogdb flow load_fw` (MCP `gdb_flow`) then runs
+`gdb -batch -nx -x SCRIPT -ex "target remote :PORT" -ex load_fw` from the
+script's directory, through the gdb seat, and returns gdb's output and exit
+status. It needs write and an empty seat (with your gdb attached, use
+`exec` instead). The target stays halted afterwards unless `resume` is
+given. When the procedure changes, edit the script; cogdb does not change.
+
 ### Detach
 
 When gdb detaches or quits, the hub answers locally and the stub session
@@ -146,7 +165,7 @@ stays up for the agent. `--detach resume` (default) resumes the target,
 Tools: `gdb_status`, `gdb_halt`, `gdb_continue`, `gdb_step`,
 `gdb_wait_stop`, `gdb_read_registers`, `gdb_read_memory`,
 `gdb_write_memory`, `gdb_write_register`, `gdb_breakpoint`, `gdb_monitor`,
-`gdb_exec`, `gdb_events`, `gdb_raw_packet`.
+`gdb_exec`, `gdb_flow`, `gdb_events`, `gdb_raw_packet`.
 
 ## Compared with
 

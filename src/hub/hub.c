@@ -79,10 +79,20 @@ static void seat_monitor(void *ctx, const char *args, cg_buf_t *out)
     cg_buf_printf(out, "cogdb: agent level is now %s\n", cg_level_name(cg_hub_agent_level(h)));
 }
 
+/* A flow's gdb that never attached must not leave its detach mode to the
+ * next human. */
+static void flow_ended(void *ctx)
+{
+    cg_hub_t *h = ctx;
+    if (!cg_gdbseat_attached(h->seat))
+        cg_gdbseat_detach_once(h->seat, h->cfg.gdb.detach);
+}
+
 static void teardown(cg_hub_t *h)
 {
     cg_ctl_free(h->ctl);
     cg_gdbseat_free(h->seat);
+    cg_flow_free(h->flow);
     cg_miseat_free(h->mi);
     cg_grant_free(h->grant);
     cg_recorder_free(h->rec);
@@ -137,6 +147,9 @@ int cg_hub_run(const cg_hub_cfg_t *cfg)
     char mi_path[CG_PATH_MAX];
     if (cg_instance_path(h->name, "gdb-mi", mi_path, sizeof(mi_path)) == 0)
         h->mi = cg_miseat_new(h->loop, h->bus, mi_path);
+    h->flow = cg_flow_new(h->loop, h->bus, &cfg->flow);
+    if (h->flow)
+        cg_flow_on_end(h->flow, flow_ended, h);
     if (cfg->record_path) {
         h->rec = cg_recorder_new(h->bus, cfg->record_path);
         if (!h->rec) {

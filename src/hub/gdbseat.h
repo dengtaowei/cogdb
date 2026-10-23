@@ -40,6 +40,8 @@ int cg_gdbseat_attached(const cg_gdbseat_t *s);
 const char *cg_gdbseat_peer(const cg_gdbseat_t *s);
 int cg_gdbseat_port(const cg_gdbseat_t *s);
 void cg_gdbseat_kick(cg_gdbseat_t *s, const char *why);
+/* How the next client to attach detaches, instead of cfg.detach. */
+void cg_gdbseat_detach_once(cg_gdbseat_t *s, cg_detach_t mode);
 
 int cg_detach_parse(const char *s, cg_detach_t *out);
 const char *cg_detach_name(cg_detach_t d);

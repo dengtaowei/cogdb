@@ -207,6 +207,18 @@ static void plan_exec(cJSON *a, plan_t *p)
     p->timeout_ms = 130000;
 }
 
+static void plan_flow(cJSON *a, plan_t *p)
+{
+    const char *name = s_arg(a, "name");
+    const char *after = s_arg(a, "after");
+    if (!name || !*name || strpbrk(name, " \r\n")) {
+        p->err = "need a flow name";
+        return;
+    }
+    cg_buf_printf(&p->line, "FLOW %s %s", name, after && *after ? after : "keep");
+    p->timeout_ms = 310000;
+}
+
 static void plan_events(cJSON *a, plan_t *p)
 {
     const char *types = s_arg(a, "types");
@@ -284,6 +296,13 @@ static const tool_t k_tools[] = {
      "'new-ui mi PATH' (see gdb_status gdb_mi_path). Reporting commands need read; anything "
      "else needs write. Fails while the target runs; halt first.",
      "{\"command\":{\"type\":\"string\"}}", "[\"command\"]", plan_exec},
+    {"gdb_flow",
+     "Run a named procedure (e.g. a firmware load) that the user defined in their gdb script; "
+     "gdb_status lists the allowed names under flows. Needs write and no gdb attached. "
+     "after: keep (default, target stays halted) or resume. Returns gdb's output.",
+     "{\"name\":{\"type\":\"string\"},"
+     "\"after\":{\"type\":\"string\",\"enum\":[\"keep\",\"resume\"]}}",
+     "[\"name\"]", plan_flow},
     {"gdb_events",
      "Recent hub events: stops, runs, console output, gdb attach/detach, notes. types narrows "
      "it (comma list of link,client,run,stop,console,note,packet or all).",
