@@ -26,10 +26,15 @@ void cg_regmap_forget(cg_regmap_t *rm, void *ctx);
 /* NULL if no description is loaded. */
 const cg_tdesc_t *cg_regmap_tdesc(const cg_regmap_t *rm);
 
+#define CG_REGMAP_MAX_MISSING 512
+
 /* Formats a 'g' reply (RLE-expanded) as "name=value" lines. which is
- * NULL/"" for scalar registers, "all", or a comma list of names. */
-int cg_regmap_format_g(const cg_regmap_t *rm, const char *g, size_t n, const char *which,
-                       cg_buf_t *out);
+ * NULL/"" for the scalar registers in g plus the pc, "all", or a comma list
+ * of names. Stubs may send a g that stops early (XuanTie sends only x0-x31);
+ * wanted registers past its end go to missing[] for reading with 'p'.
+ * Returns how many were put there. */
+size_t cg_regmap_format_g(const cg_regmap_t *rm, const char *g, size_t n, const char *which,
+                          cg_buf_t *out, unsigned *missing, size_t cap);
 /* Target-order hex to "0x..." (<= 64 bits) or raw hex; "unavailable" for x's. */
 int cg_regmap_value(const cg_regmap_t *rm, const char *hex, size_t n, cg_buf_t *out);
 /* Value to target-order hex of bitsize bits. */

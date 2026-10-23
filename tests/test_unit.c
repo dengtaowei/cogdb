@@ -188,6 +188,7 @@ static const char k_root[] =
     "  <xi:include href=\"core.xml\"/>\n"
     "  <feature name=\"csr\">\n"
     "    <reg name=\"mstatus\" bitsize=\"32\" regnum=\"833\" group=\"csr\"/>\n"
+    "    <reg name=\"mvendorid\" bitsize=\"32\" regnum=\"0xf52\"/>\n"
     "  </feature>\n"
     "</target>\n";
 
@@ -223,7 +224,7 @@ static void test_tdesc(void)
     cg_tdesc_init(&t);
     CHECK(cg_tdesc_build(&t, "target.xml", lookup, NULL) == 0);
     CHECK_STR(t.arch, "riscv:rv32");
-    CHECK(t.n == 4);
+    CHECK(t.n == 5);
     CHECK(cg_tdesc_find(&t, "commented") == NULL);
     const cg_reg_t *ra = cg_tdesc_find(&t, "RA");
     CHECK(ra && ra->regnum == 1 && ra->bitsize == 32);
@@ -232,6 +233,10 @@ static void test_tdesc(void)
     /* sorted by regnum, even though mstatus came first in the document */
     CHECK_STR(t.regs[0].name, "zero");
     CHECK_STR(t.regs[3].name, "mstatus");
+    /* XuanTie writes CSR numbers in hex, as gdb's base-0 parse allows */
+    const cg_reg_t *mv = cg_tdesc_find(&t, "mvendorid");
+    CHECK(mv && mv->regnum == 0xf52);
+    CHECK_STR(t.regs[4].name, "mvendorid");
     CHECK(cg_tdesc_by_num(&t, 32) == pc);
     cg_tdesc_free(&t);
 }

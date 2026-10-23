@@ -165,9 +165,10 @@ static int add_reg(build_t *b, const tag_t *tag)
     const char *grp = attr(tag, "group");
     if (grp)
         copy(r->group, sizeof(r->group), grp, strlen(grp));
-    r->bitsize = (unsigned)strtoul(bits, NULL, 10);
+    /* gdb reads these with base 0; XuanTie numbers CSRs as regnum="0xf52". */
+    r->bitsize = (unsigned)strtoul(bits, NULL, 0);
     const char *num = attr(tag, "regnum");
-    r->regnum = num ? (unsigned)strtoul(num, NULL, 10) : b->next_regnum;
+    r->regnum = num ? (unsigned)strtoul(num, NULL, 0) : b->next_regnum;
     b->next_regnum = r->regnum + 1;
     return 0;
 }

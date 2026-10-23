@@ -240,10 +240,10 @@ int cg_regmap_encode(const cg_regmap_t *rm, uint64_t value, unsigned bitsize, cg
     return cg_hex_encode(out, b, nb);
 }
 
-static int wanted(const cg_reg_t *r, const char *which)
+static int wanted(const cg_regmap_t *rm, const cg_reg_t *r, const char *which, int in_g)
 {
     if (!which || !*which)
-        return r->bitsize <= 64;
+        return in_g ? r->bitsize <= 64 : r == cg_regmap_pc(rm);
     if (strcmp(which, "all") == 0)
         return 1;
     size_t k = strlen(r->name);
@@ -258,29 +258,35 @@ static int wanted(const cg_reg_t *r, const char *which)
     return 0;
 }
 
-int cg_regmap_format_g(const cg_regmap_t *rm, const char *g, size_t n, const char *which,
-                       cg_buf_t *out)
+size_t cg_regmap_format_g(const cg_regmap_t *rm, const char *g, size_t n, const char *which,
+                          cg_buf_t *out, unsigned *missing, size_t cap)
 {
     const cg_tdesc_t *td = cg_regmap_tdesc(rm);
     if (!td) {
         cg_buf_puts(out, "g=");
         cg_buf_append(out, g, n);
-        return cg_buf_putc(out, '\n');
+        cg_buf_putc(out, '\n');
+        return 0;
     }
-    size_t off = 0;
+    size_t off = 0, nmiss = 0;
     for (size_t i = 0; i < td->n; i++) {
         const cg_reg_t *r = &td->regs[i];
         size_t w = r->bitsize / 4;
-        if (w == 0 || off + w > n)
-            break;
-        if (wanted(r, which)) {
-            cg_buf_printf(out, "%s=", r->name);
-            cg_regmap_value(rm, g + off, w, out);
-            cg_buf_putc(out, '\n');
+        if (w == 0)
+            continue;
+        int in_g = off + w <= n;
+        if (wanted(rm, r, which, in_g)) {
+            if (in_g) {
+                cg_buf_printf(out, "%s=", r->name);
+                cg_regmap_value(rm, g + off, w, out);
+                cg_buf_putc(out, '\n');
+            } else if (nmiss < cap) {
+                missing[nmiss++] = r->regnum;
+            }
         }
         off += w;
     }
-    return 0;
+    return nmiss;
 }
 
 unsigned cg_regmap_default_bp_kind(const cg_regmap_t *rm)

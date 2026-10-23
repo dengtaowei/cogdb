@@ -17,8 +17,19 @@ class FakeStub:
     """Minimal all-stop stub with 4 KiB of memory at 0x1000. Like XuanTie
     DebugServer it drops a client whose first byte is not '+'."""
 
-    def __init__(self, port):
+    XT_XML = (b'<?xml version="1.0"?><target><architecture>riscv</architecture>'
+              b'<feature name="org.gnu.gdb.riscv.cpu">'
+              b'<reg name="zero" bitsize="32" regnum="0"/>'
+              b'<reg name="ra" bitsize="32" regnum="1"/>'
+              b'<reg name="pc" bitsize="32" regnum="2"/></feature>'
+              b'<feature name="org.gnu.gdb.riscv.csr">'
+              b'<reg name="mvendorid" bitsize="32" regnum="0xf52"/></feature></target>')
+
+    def __init__(self, port, xuantie=False):
+        """xuantie: describe registers like XuanTie DebugServer does (hex CSR
+        regnums, a g reply without pc or CSRs)."""
         self.port = port
+        self.xuantie = xuantie
         self.mem = bytearray(range(256)) * 16
         self.running = False
         self.nak_once = {b"m1000,4"}  # answer '-' the first time we see these
@@ -51,6 +62,14 @@ class FakeStub:
             self.send(b"S05")
         elif p == b"g":
             self.send(b"11111111" + b"22222222")
+        elif self.xuantie and p.startswith(b"qXfer:features:read:target.xml:"):
+            off, n = (int(x, 16) for x in p.split(b":")[4].split(b","))
+            chunk = self.XT_XML[off:off + n]
+            self.send((b"l" if off + n >= len(self.XT_XML) else b"m") + chunk)
+        elif self.xuantie and p == b"p2":
+            self.send(b"e8010010")
+        elif self.xuantie and p == b"pf52":
+            self.send(b"04000000")
         elif p.startswith(b"m"):
             addr, n = (int(x, 16) for x in p[1:].split(b","))
             if addr < 0x1000 or addr + n > 0x2000:
@@ -329,7 +348,28 @@ def main(cogdb):
         stub.close()
     c.ok(rc == 0, "hub exits cleanly on SIGTERM", str(rc))
     check_hangup_backoff(c, cogdb)
+    check_short_g(c, cogdb)
     return c.done()
+
+
+def check_short_g(c, cogdb):
+    """XuanTie DebugServer: hex CSR regnums and a g holding only the GPRs."""
+    port = free_port()
+    stub = FakeStub(port, xuantie=True)
+    hub = Hub(cogdb, f"127.0.0.1:{port}", name="xuantie")
+    try:
+        hub.wait_status("state", "stopped")
+        r = hub.ctl("REGS pc,ra,mvendorid")
+        c.ok("ra=0x22222222" in r and "pc=0x100001e8" in r and "mvendorid=0x00000004" in r,
+             "registers missing from a short g are read with p", r)
+        r = hub.ctl("REGS")
+        c.ok("zero=0x11111111" in r and "pc=0x100001e8" in r and "mvendorid" not in r,
+             "default REGS is the g registers plus pc", r)
+        r = hub.ctl("REG mvendorid")
+        c.ok("mvendorid=0x00000004" in r, "hex regnum maps to the right p packet", r)
+    finally:
+        hub.close()
+        stub.close()
 
 
 def check_hangup_backoff(c, cogdb):

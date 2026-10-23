@@ -351,6 +351,62 @@ static cg_call_rc_t cmd_step(cg_hub_t *h, cg_call_t *call, const char *args)
 
 /* ---- registers --------------------------------------------------------- */
 
+typedef struct {
+    cg_buf_t which;
+    unsigned missing[CG_REGMAP_MAX_MISSING];
+    size_t nmiss, next;
+} regs_t;
+
+static void regs_free(void *p)
+{
+    regs_t *r = p;
+    cg_buf_free(&r->which);
+    free(r);
+}
+
+static void regs_p_next(cg_call_t *call);
+
+static void regs_p_reply(void *ctx, cg_reply_status_t st, const char *p, size_t n)
+{
+    cg_call_t *call = ctx;
+    cg_hub_t *h = cg_call_hub(call);
+    regs_t *rs = cg_call_user(call);
+    const cg_tdesc_t *td = cg_regmap_tdesc(h->regmap);
+    const cg_reg_t *r = td ? cg_tdesc_by_num(td, rs->missing[rs->next]) : NULL;
+    cg_buf_t *out = cg_call_out(call);
+    rs->next++;
+    if (r) {
+        cg_buf_printf(out, "%s=", r->name);
+        if (st == CG_REPLY_OK && n && !is_error(p, n)) {
+            cg_buf_t ex;
+            cg_buf_init(&ex);
+            cg_rsp_expand_rle(p, n, &ex);
+            cg_regmap_value(h->regmap, ex.data, ex.len, out);
+            cg_buf_free(&ex);
+        } else {
+            cg_buf_puts(out, "unavailable");
+        }
+        cg_buf_putc(out, '\n');
+    }
+    if (st == CG_REPLY_LINKDOWN)
+        rs->next = rs->nmiss;
+    regs_p_next(call);
+}
+
+static void regs_p_next(cg_call_t *call)
+{
+    regs_t *rs = cg_call_user(call);
+    if (rs->next >= rs->nmiss) {
+        cg_call_finish(call);
+        return;
+    }
+    char pkt[24];
+    int k = snprintf(pkt, sizeof(pkt), "p%x", rs->missing[rs->next]);
+    static const cg_req_ops_t ops = {regs_p_reply, NULL};
+    if (cg_target_submit(cg_call_hub(call)->target, "agent", pkt, (size_t)k, &ops, call) != 0)
+        cg_call_finish(call);
+}
+
 static void regs_g_reply(void *ctx, cg_reply_status_t st, const char *p, size_t n)
 {
     cg_call_t *call = ctx;
@@ -362,12 +418,13 @@ static void regs_g_reply(void *ctx, cg_reply_status_t st, const char *p, size_t 
     cg_buf_t ex;
     cg_buf_init(&ex);
     cg_rsp_expand_rle(p, n, &ex);
-    cg_buf_t *which = cg_call_user(call);
+    regs_t *rs = cg_call_user(call);
     cg_buf_puts(cg_call_out(call), "OK\n");
-    cg_regmap_format_g(h->regmap, ex.data, ex.len, which ? which->data : NULL,
-                       cg_call_out(call));
+    rs->nmiss = cg_regmap_format_g(h->regmap, ex.data, ex.len, rs->which.data,
+                                   cg_call_out(call), rs->missing, CG_REGMAP_MAX_MISSING);
+    rs->next = 0;
     cg_buf_free(&ex);
-    cg_call_finish(call);
+    regs_p_next(call);
 }
 
 static const cg_req_ops_t k_g_ops = {regs_g_reply, NULL};
@@ -378,6 +435,34 @@ static void regs_ready(void *ctx, int ok)
     cg_call_t *call = ctx;
     if (cg_target_submit(cg_call_hub(call)->target, "agent", "g", 1, &k_g_ops, call) != 0)
         fail(call, "read registers", CG_REPLY_LINKDOWN, "", 0);
+}
+
+/* REG fallback for stubs without 'p': slice the one register out of g. */
+static void reg_g_reply(void *ctx, cg_reply_status_t st, const char *p, size_t n)
+{
+    cg_call_t *call = ctx;
+    cg_hub_t *h = cg_call_hub(call);
+    if (st != CG_REPLY_OK || n == 0 || is_error(p, n)) {
+        fail(call, "read register", st, p, n);
+        return;
+    }
+    cg_buf_t ex;
+    cg_buf_init(&ex);
+    cg_rsp_expand_rle(p, n, &ex);
+    cg_buf_t *name = cg_call_user(call);
+    cg_buf_t lines;
+    cg_buf_init(&lines);
+    cg_regmap_format_g(h->regmap, ex.data, ex.len, name->data, &lines, NULL, 0);
+    if (lines.len) {
+        cg_buf_puts(cg_call_out(call), "OK\n");
+        cg_buf_append(cg_call_out(call), lines.data, lines.len);
+    } else {
+        cg_buf_printf(cg_call_out(call), "ERR read register: stub has no value for %s\n",
+                      name->data);
+    }
+    cg_buf_free(&lines);
+    cg_buf_free(&ex);
+    cg_call_finish(call);
 }
 
 static cg_buf_t *user_text(cg_call_t *call, const char *s)
@@ -393,8 +478,13 @@ static cg_buf_t *user_text(cg_call_t *call, const char *s)
 
 static cg_call_rc_t cmd_regs(cg_hub_t *h, cg_call_t *call, const char *args)
 {
+    regs_t *rs = calloc(1, sizeof(*rs));
+    if (!rs)
+        return err(call, "out of memory");
+    cg_buf_init(&rs->which);
     if (*args)
-        user_text(call, args);
+        cg_buf_puts(&rs->which, args);
+    cg_call_set_user(call, rs, regs_free);
     cg_regmap_ensure(h->regmap, regs_ready, call);
     return CG_CALL_PENDING;
 }
@@ -405,8 +495,8 @@ static void reg_p_reply(void *ctx, cg_reply_status_t st, const char *p, size_t n
     cg_hub_t *h = cg_call_hub(call);
     cg_buf_t *name = cg_call_user(call);
     if (st == CG_REPLY_OK && (n == 0 || is_error(p, n))) {
-        /* No 'p' support or not in its set: slice it out of 'g'. */
-        if (cg_target_submit(h->target, "agent", "g", 1, &k_g_ops, call) != 0)
+        static const cg_req_ops_t g_ops = {reg_g_reply, NULL};
+        if (cg_target_submit(h->target, "agent", "g", 1, &g_ops, call) != 0)
             fail(call, "read register", CG_REPLY_LINKDOWN, "", 0);
         return;
     }
