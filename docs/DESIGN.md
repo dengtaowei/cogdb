@@ -28,6 +28,8 @@ whether the target runs and who resumed it. That scheduler is
               ├── record.c    JSON Lines recorder
               ├── policy.c    agent levels
               ├── grant.c     time-limited raises the gdb user hands out
+              ├── miseat.c    pty for the user's `new-ui mi`, one command at a time
+              │   gdbcmd.c    level a gdb CLI command needs
               ├── target.c    THE session: queue, acks, run state, timeouts
               └── events.c    publish/subscribe bus + event ring
  rsp/        rsp.c (framing, RLE, escapes)  stop.c (stop replies)  tdesc.c (XML)

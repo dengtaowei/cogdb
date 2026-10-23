@@ -7,6 +7,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "gdbcmd.h"
 #include "hub_priv.h"
 #include "rsp/rsp.h"
 #include "util/hex.h"
@@ -232,6 +233,14 @@ static cg_call_rc_t cmd_status(cg_hub_t *h, cg_call_t *call, const char *args)
                       cg_grant_remaining_s(h->grant));
     else
         cg_buf_puts(out, "grant=-\n");
+    if (h->mi)
+        cg_buf_printf(out, "gdb_mi=%s\ngdb_mi_path=%s\n",
+                      cg_miseat_busy(h->mi)       ? "busy"
+                      : cg_miseat_attached(h->mi) ? "attached"
+                                                  : "waiting",
+                      cg_miseat_path(h->mi));
+    else
+        cg_buf_puts(out, "gdb_mi=-\n");
     cg_buf_printf(out, "queue=%zu\narch=%s\nregisters=%zu\npacket_size=%u\nagent_breakpoints=%d\n",
                   cg_target_queue_len(h->target), td && td->arch[0] ? td->arch : "-",
                   td ? td->n : 0, cg_target_caps(h->target)->packet_size, h->nbps);
@@ -958,6 +967,73 @@ static cg_call_rc_t cmd_raw(cg_hub_t *h, cg_call_t *call, const char *args)
     return CG_CALL_PENDING;
 }
 
+/* ---- the human's gdb, over its MI channel ------------------------------ */
+
+#define EXEC_TIMEOUT_MS 120000
+
+static void exec_done(void *ctx, int ok, const char *text, size_t n)
+{
+    cg_call_t *call = ctx;
+    cg_hub_t *h = cg_call_hub(call);
+    cg_call_disarm(call);
+    cg_buf_t *out = cg_call_out(call);
+    cg_buf_puts(out, ok ? "OK\n" : "ERR gdb:\n");
+    cg_buf_append(out, text, n);
+    if (n && text[n - 1] != '\n')
+        cg_buf_putc(out, '\n');
+    cg_bus_emitf(h->bus, CG_EV_NOTE, "agent", "gdb exec %s", ok ? "done" : "failed");
+    cg_call_finish(call);
+}
+
+static void exec_timeout(void *ctx)
+{
+    cg_call_t *call = ctx;
+    cg_call_own_timer(call, 0);
+    cg_buf_puts(cg_call_out(call), "ERR timeout: gdb has not finished the command\n");
+    cg_call_finish(call);
+}
+
+static cg_call_rc_t cmd_exec(cg_hub_t *h, cg_call_t *call, const char *args)
+{
+    cg_level_t need;
+    switch (cg_gdbcmd_classify(args, &need)) {
+    case CG_GDBCMD_BAD:
+        return err(call, "usage: EXEC GDB-COMMAND (one line)");
+    case CG_GDBCMD_BLOCKED:
+        return err(call, "blocked: this gdb command is never run for an agent");
+    case CG_GDBCMD_OK:
+        break;
+    }
+    /* A gdb that opened the channel is a human's session even when it is
+     * not on our seat, so the with-gdb cap applies either way. */
+    cg_level_t have = cg_gdbseat_attached(h->seat)
+                          ? cg_hub_agent_level(h)
+                          : cg_policy_effective(&h->cfg.policy, 1);
+    if (need > have) {
+        cg_buf_printf(cg_call_out(call),
+                      "ERR policy: EXEC of this command needs level %s, agents have %s"
+                      " (the gdb user can run: monitor cogdb allow %s)\n",
+                      cg_level_name(need), cg_level_name(have), cg_level_name(need));
+        return CG_CALL_DONE;
+    }
+    if (!h->mi)
+        return err(call, "no gdb MI channel in this hub");
+    switch (cg_miseat_exec(h->mi, args, exec_done, call)) {
+    case 0:
+        break;
+    case -2:
+        return err(call, "busy: another agent command is running in gdb");
+    default:
+        cg_buf_printf(cg_call_out(call),
+                      "ERR no gdb on the MI channel; the gdb user can run: new-ui mi %s\n",
+                      cg_miseat_path(h->mi));
+        return CG_CALL_DONE;
+    }
+    cg_bus_emitf(h->bus, CG_EV_NOTE, "agent", "gdb exec: %s", args);
+    cg_call_own_timer(call, cg_loop_timer(h->loop, EXEC_TIMEOUT_MS, exec_timeout, call));
+    return CG_CALL_PENDING;
+}
+
 /* ---- hub management ---------------------------------------------------- */
 
 static cg_call_rc_t cmd_kick(cg_hub_t *h, cg_call_t *call, const char *args)
@@ -1014,6 +1090,7 @@ const cg_cmd_t cg_commands[] = {
     {"WREG", L(WRITE), N(STOPPED), CG_ARGS_REQ, cmd_wreg, "WREG NAME VALUE"},
     {"MONITOR", L(WRITE), N(IDLE), CG_ARGS_REQ, cmd_monitor, "MONITOR TEXT"},
     {"RAW", L(WRITE), N(IDLE), CG_ARGS_REQ, cmd_raw, "RAW PACKET"},
+    {"EXEC", L(READ), 0, CG_ARGS_REQ, cmd_exec, "EXEC GDB-COMMAND"},
     {"KICK", L(WRITE), 0, CG_ARGS_NONE, cmd_kick, "KICK"},
     {"RECONNECT", L(WRITE), 0, CG_ARGS_NONE, cmd_reconnect, "RECONNECT"},
     {"SHUTDOWN", L(WRITE), 0, CG_ARGS_NONE, cmd_shutdown, "SHUTDOWN"},

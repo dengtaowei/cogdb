@@ -46,6 +46,7 @@ static void release(cg_call_t *call)
     cg_hub_t *h = call->ctl->hub;
     cg_target_forget(h->target, call);
     cg_regmap_forget(h->regmap, call);
+    cg_miseat_forget(h->mi, call);
     if (call->sub)
         cg_bus_unsubscribe(h->bus, call->sub);
     if (call->timer)

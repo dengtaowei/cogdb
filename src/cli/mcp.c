@@ -196,6 +196,17 @@ static void plan_monitor(cJSON *a, plan_t *p)
     p->timeout_ms = 130000;
 }
 
+static void plan_exec(cJSON *a, plan_t *p)
+{
+    const char *cmd = s_arg(a, "command");
+    if (!cmd || strpbrk(cmd, "\r\n")) {
+        p->err = "need a one-line command";
+        return;
+    }
+    cg_buf_printf(&p->line, "EXEC %s", cmd);
+    p->timeout_ms = 130000;
+}
+
 static void plan_events(cJSON *a, plan_t *p)
 {
     const char *types = s_arg(a, "types");
@@ -267,6 +278,12 @@ static const tool_t k_tools[] = {
     {"gdb_monitor",
      "Run a stub monitor command (OpenOCD: 'reset halt', 'reg', 'mdw 0x0 4'; needs write).",
      "{\"command\":{\"type\":\"string\"}}", "[\"command\"]", plan_monitor},
+    {"gdb_exec",
+     "Run a gdb CLI command inside the user's own gdb (its symbols and target), e.g. 'bt', "
+     "'info symbol $pc', 'x/4xw 0x20000000', 'load'. Needs the user to have run "
+     "'new-ui mi PATH' (see gdb_status gdb_mi_path). Reporting commands need read; anything "
+     "else needs write. Fails while the target runs; halt first.",
+     "{\"command\":{\"type\":\"string\"}}", "[\"command\"]", plan_exec},
     {"gdb_events",
      "Recent hub events: stops, runs, console output, gdb attach/detach, notes. types narrows "
      "it (comma list of link,client,run,stop,console,note,packet or all).",

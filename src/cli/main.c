@@ -57,6 +57,7 @@ static void usage(FILE *fp)
             "  mem ADDR LEN | wmem ADDR HEX\n"
             "  break ADDR [sw|hw|write|read|access] [KIND] | unbreak ... | breaks\n"
             "  monitor TEXT | raw PACKET | kick | reconnect | shutdown\n"
+            "  exec GDB-COMMAND   (in the user's gdb, after: new-ui mi PATH)\n"
             "\n"
             "event TYPES: comma list of link,client,run,stop,console,note,packet, or all\n");
 }
@@ -190,7 +191,7 @@ static void print_mem(const char *reply)
 
 static int timeout_for(const char *verb, const char *args)
 {
-    if (!strcasecmp(verb, "monitor"))
+    if (!strcasecmp(verb, "monitor") || !strcasecmp(verb, "exec"))
         return 130000;
     if (!strcasecmp(verb, "wait") || !strcasecmp(verb, "halt") || !strcasecmp(verb, "cont")) {
         long ms = args && *args ? strtol(args, NULL, 10) : 0;

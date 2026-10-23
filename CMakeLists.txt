@@ -56,6 +56,8 @@ add_library(cogdb_hub STATIC
     src/hub/policy.c
     src/hub/gdbseat.c
     src/hub/grant.c
+    src/hub/gdbcmd.c
+    src/hub/miseat.c
     src/hub/ctl.c
     src/hub/ctl_cmd.c
     src/hub/record.c

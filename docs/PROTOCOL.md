@@ -54,11 +54,19 @@ Before a command runs, the hub checks:
 | `WREG NAME VALUE` | write | halted | `OK`                                  |
 | `MONITOR TEXT` | write | idle | `OK` + monitor output                        |
 | `RAW PACKET` | write | idle  | `OK bytes=N` + reply (non-printables `\xNN`)  |
+| `EXEC GDB-COMMAND` | read/write | | `OK` + gdb output, or `ERR gdb:` + message |
 | `KICK`    | write |         | `OK kicked` (drops the gdb client)             |
 | `RECONNECT` | write |       | `OK link=up\|down`                             |
 | `SHUTDOWN` | write |        | `OK shutting down`                             |
 
 "Halted" means stopped. "Idle" means linked and not running.
+
+`EXEC` runs a gdb CLI command in the user's gdb over its MI channel
+(`new-ui mi PATH`, PATH from STATUS `gdb_mi_path`). Its level depends on
+the command (see README); the cap that applies is always the with-gdb one,
+plus any grant. Other replies: `ERR blocked: ...` for commands never run
+for an agent, `ERR no gdb on the MI channel; ...`, `ERR busy: ...` (one
+command at a time), and after 120 s `ERR timeout: ...`.
 
 ### Stop report
 
@@ -98,7 +106,10 @@ lists everything. With no target description, the reply is `g=<raw hex>`.
 ### STATUS keys
 
 `name stub link state run_owner last_stop gdb gdb_port detach agent_level
-policy grant queue arch registers packet_size agent_breakpoints events record`
+policy grant gdb_mi gdb_mi_path queue arch registers packet_size
+agent_breakpoints events record`
+
+`gdb_mi` is `waiting`, `attached` or `busy`.
 
 ### Events
 

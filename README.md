@@ -105,6 +105,28 @@ The grant ends when it expires, when it is revoked, or when that gdb
 detaches, and never exceeds `--agent`. Other `monitor` commands still go to
 the stub. An agent refused by the cap is told which command to ask for.
 
+### Agents in your gdb
+
+The packet seat cannot give an agent your gdb's symbols, `bt`, or `load`.
+For that, open a second UI on your gdb pointing at the pty the hub holds
+(the path is in `cogdb -n NAME status`, key `gdb_mi_path`):
+
+```
+(gdb) new-ui mi $XDG_RUNTIME_DIR/cogdb/myboard/gdb-mi
+```
+
+Agents can then run gdb commands in your session with `cogdb exec ...` or
+the `gdb_exec` MCP tool. Their output stays off your console; each command
+is logged as a `note` event (`cogdb -n NAME watch note`). Commands that only
+report (`bt`, `info`, `x`, `print` without assignment or calls, `list`,
+`disassemble`, `show`, `ptype`, `whatis`) need `read`; anything else, such
+as `load`, `file`, `set var` or `continue`, needs `write`, which while you
+are attached means `monitor cogdb allow write`. `shell`, `pipe`, `source`,
+`define`, `monitor`, `python` and similar are always refused, and grants
+cannot change while an agent command runs. The channel closes when your
+gdb exits; the hub offers a fresh one at the same path. It needs no Python
+in gdb.
+
 ### Detach
 
 When gdb detaches or quits, the hub answers locally and the stub session
@@ -124,7 +146,7 @@ stays up for the agent. `--detach resume` (default) resumes the target,
 Tools: `gdb_status`, `gdb_halt`, `gdb_continue`, `gdb_step`,
 `gdb_wait_stop`, `gdb_read_registers`, `gdb_read_memory`,
 `gdb_write_memory`, `gdb_write_register`, `gdb_breakpoint`, `gdb_monitor`,
-`gdb_events`, `gdb_raw_packet`.
+`gdb_exec`, `gdb_events`, `gdb_raw_packet`.
 
 ## Compared with
 

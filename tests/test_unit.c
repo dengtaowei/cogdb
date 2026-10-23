@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "hub/events.h"
+#include "hub/gdbcmd.h"
 #include "hub/policy.h"
 #include "rsp/rsp.h"
 #include "rsp/stop.h"
@@ -327,8 +328,49 @@ static void test_hex(void)
     CHECK(cg_hex_decode("abc", 3, out, 4) < 0);
 }
 
+static int gdbcmd_level(const char *cmd)
+{
+    cg_level_t l = CG_LVL_READ;
+    cg_gdbcmd_verdict_t v = cg_gdbcmd_classify(cmd, &l);
+    return v == CG_GDBCMD_OK ? (int)l : -(int)v;
+}
+
+static void test_gdbcmd(void)
+{
+    const int R = CG_LVL_READ, W = CG_LVL_WRITE;
+    const int BLK = -CG_GDBCMD_BLOCKED, BAD = -CG_GDBCMD_BAD;
+    CHECK(gdbcmd_level("bt") == R);
+    CHECK(gdbcmd_level("  backtrace full") == R);
+    CHECK(gdbcmd_level("info symbol $pc") == R);
+    CHECK(gdbcmd_level("x/4xw 0x40001000") == R);
+    CHECK(gdbcmd_level("p/x counter") == R);
+    CHECK(gdbcmd_level("print a == b && c <= d && e != f") == R);
+    CHECK(gdbcmd_level("print (char)x") == R);
+    CHECK(gdbcmd_level("print arr[1]") == R);
+    CHECK(gdbcmd_level("print x = 1") == W);
+    CHECK(gdbcmd_level("print x += 1") == W);
+    CHECK(gdbcmd_level("print x++") == W);
+    CHECK(gdbcmd_level("print foo(1)") == W);
+    CHECK(gdbcmd_level("print (*fp) (1)") == W);
+    CHECK(gdbcmd_level("load") == W);
+    CHECK(gdbcmd_level("set var x = 1") == W);
+    CHECK(gdbcmd_level("c") == W);
+    CHECK(gdbcmd_level("frame 1") == W);
+    CHECK(gdbcmd_level("shell ls") == BLK);
+    CHECK(gdbcmd_level("she ls") == BLK);
+    CHECK(gdbcmd_level("!ls") == BLK);
+    CHECK(gdbcmd_level("| bt | sh") == BLK);
+    CHECK(gdbcmd_level("monitor cogdb allow write") == BLK);
+    CHECK(gdbcmd_level("mon reset") == BLK);
+    CHECK(gdbcmd_level("source /tmp/x") == BLK);
+    CHECK(gdbcmd_level("new-ui mi /dev/pts/3") == BLK);
+    CHECK(gdbcmd_level("") == BAD);
+    CHECK(gdbcmd_level("bt\nshell ls") == BAD);
+}
+
 int main(void)
 {
+    test_gdbcmd();
     test_frame();
     test_decoder();
     test_rle_escape();

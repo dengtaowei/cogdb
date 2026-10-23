@@ -4,10 +4,12 @@ gdbserver, a real gdb and an agent share it."""
 
 import json
 import os
+import pty
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -24,6 +26,93 @@ def symbols(binary):
         if len(parts) == 3:
             syms[parts[2]] = int(parts[0], 16)
     return syms
+
+
+class TtyGdb:
+    """An interactive gdb on a pty, as a human would run it."""
+
+    def __init__(self, args):
+        self.master, slave = pty.openpty()
+        self.proc = subprocess.Popen(["gdb", "-q", "-nx"] + args, stdin=slave, stdout=slave,
+                                     stderr=slave, close_fds=True)
+        os.close(slave)
+        self.out = b""
+        self.reader = threading.Thread(target=self._drain, daemon=True)
+        self.reader.start()
+
+    def _drain(self):
+        while True:
+            try:
+                data = os.read(self.master, 4096)
+            except OSError:
+                return
+            if not data:
+                return
+            self.out += data
+
+    def type(self, line):
+        os.write(self.master, line.encode() + b"\n")
+
+    def text(self):
+        return self.out.decode(errors="replace")
+
+    def close(self):
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        os.close(self.master)
+
+
+def mi_checks(c, hub, exe):
+    st = hub.status()
+    path = st.get("gdb_mi_path", "")
+    c.ok(st.get("gdb_mi") == "waiting" and os.path.islink(path),
+         "hub offers a gdb MI channel", str(st))
+    r = hub.ctl("EXEC bt")
+    c.ok(r.startswith("ERR no gdb") and f"new-ui mi {path}" in r,
+         "EXEC without the channel tells the user what to run", r)
+
+    gdb = TtyGdb(["-ex", "set sysroot /", "-ex", "set confirm off",
+                  "-ex", f"target remote 127.0.0.1:{hub.gdb_port}",
+                  "-ex", f"new-ui mi {path}", exe])
+    try:
+        hub.wait_status("gdb_mi", "attached", timeout=20)
+        r = hub.ctl("EXEC bt")
+        c.ok(r.startswith("OK\n") and re.search(r"#\d+ .* in main ", r) is not None,
+             "EXEC bt runs in the user's gdb with its symbols", r)
+        r = hub.ctl("EXEC print counter > 0")
+        c.ok(r.startswith("OK\n") and re.search(r"\$\d+ = 1", r) is not None,
+             "EXEC print of a pure expression is a read", r)
+        r = hub.ctl("EXEC print nosuchthing")
+        c.ok(r.startswith("ERR gdb:") and "nosuchthing" in r, "gdb errors come back", r)
+        r = hub.ctl("EXEC set var counter = 0")
+        c.ok(r.startswith("ERR policy") and "monitor cogdb allow write" in r,
+             "EXEC of a write needs a grant", r)
+        r = hub.ctl("EXEC shell true")
+        c.ok(r.startswith("ERR blocked"), "EXEC never runs shell", r)
+        r = hub.ctl("EXEC monitor cogdb allow write")
+        c.ok(r.startswith("ERR blocked"), "EXEC cannot grant itself", r)
+
+        gdb.type("monitor cogdb allow write 30")
+        hub.wait_status("agent_level", "write", timeout=10)
+        r = hub.ctl("EXEC set var counter = 0")
+        r2 = hub.ctl("EXEC print counter")
+        c.ok(r.startswith("OK") and re.search(r"\$\d+ = 0", r2) is not None,
+             "granted EXEC writes through the user's gdb", r + r2)
+        r = hub.ctl(f"EXEC file {exe}")
+        c.ok(r.startswith("OK"), "EXEC file does not hang on gdb's confirmation query", r)
+        c.ok("EXEC" not in gdb.text() and "-interpreter-exec" not in gdb.text(),
+             "the user's console is not cluttered by agent commands", gdb.text())
+
+        gdb.type("detach")
+        gdb.type("quit")
+        gdb.proc.wait(timeout=20)
+        hub.wait_status("gdb_mi", "waiting", timeout=10)
+        c.ok(os.path.islink(path), "channel re-offered after gdb quits")
+        r = hub.ctl("EXEC bt")
+        c.ok(r.startswith("ERR no gdb"), "EXEC fails cleanly once gdb is gone", r)
+    finally:
+        gdb.close()
 
 
 def main(cogdb):
@@ -105,6 +194,8 @@ def main(cogdb):
         r = hub.ctl("HALT 3000")
         r2 = hub.ctl(f"MEM {syms['counter']:#x} 8")
         c.ok(r.startswith("OK stopped") and r2.startswith("OK"), "agent alone again", r + r2)
+
+        mi_checks(c, hub, exe)
 
         ev = hub.ctl("EVENTS 100")
         for needle in ("client gdb attached", "run gdb", "note agent interrupt",

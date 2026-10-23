@@ -71,6 +71,10 @@ static void log_event(void *ctx, const cg_event_t *ev)
 static void seat_monitor(void *ctx, const char *args, cg_buf_t *out)
 {
     cg_hub_t *h = ctx;
+    if (cg_miseat_busy(h->mi)) {
+        cg_buf_puts(out, "cogdb: refused: an agent's command is running in this gdb\n");
+        return;
+    }
     cg_grant_monitor(h->grant, args, out);
     cg_buf_printf(out, "cogdb: agent level is now %s\n", cg_level_name(cg_hub_agent_level(h)));
 }
@@ -79,6 +83,7 @@ static void teardown(cg_hub_t *h)
 {
     cg_ctl_free(h->ctl);
     cg_gdbseat_free(h->seat);
+    cg_miseat_free(h->mi);
     cg_grant_free(h->grant);
     cg_recorder_free(h->rec);
     cg_regmap_free(h->regmap);
@@ -129,6 +134,9 @@ int cg_hub_run(const cg_hub_cfg_t *cfg)
         teardown(h);
         return 1;
     }
+    char mi_path[CG_PATH_MAX];
+    if (cg_instance_path(h->name, "gdb-mi", mi_path, sizeof(mi_path)) == 0)
+        h->mi = cg_miseat_new(h->loop, h->bus, mi_path);
     if (cfg->record_path) {
         h->rec = cg_recorder_new(h->bus, cfg->record_path);
         if (!h->rec) {
@@ -141,6 +149,8 @@ int cg_hub_run(const cg_hub_cfg_t *cfg)
 
     CG_INFO("hub '%s': stub %s, gdb on %s:%d, control %s", h->name, cfg->stub_uri,
             cfg->gdb.host, cg_gdbseat_port(h->seat), h->ctl_path);
+    if (h->mi)
+        CG_INFO("agents can use your gdb after: new-ui mi %s", cg_miseat_path(h->mi));
     cg_target_start(h->target);
     cg_loop_run(h->loop);
     CG_INFO("hub '%s' stopping", h->name);
