@@ -21,7 +21,12 @@ void cg_hub_cfg_default(cg_hub_cfg_t *cfg)
 
 cg_level_t cg_hub_agent_level(const cg_hub_t *h)
 {
-    return cg_policy_effective(&h->cfg.policy, cg_gdbseat_attached(h->seat));
+    int attached = cg_gdbseat_attached(h->seat);
+    cg_level_t lvl = cg_policy_effective(&h->cfg.policy, attached);
+    cg_level_t granted;
+    if (attached && cg_grant_level(h->grant, &granted) && granted > lvl)
+        lvl = granted < h->cfg.policy.agent ? granted : h->cfg.policy.agent;
+    return lvl;
 }
 
 void cg_hub_bp_add(cg_hub_t *h, int type, uint64_t addr, unsigned kind)
@@ -63,10 +68,18 @@ static void log_event(void *ctx, const cg_event_t *ev)
     cg_buf_free(&line);
 }
 
+static void seat_monitor(void *ctx, const char *args, cg_buf_t *out)
+{
+    cg_hub_t *h = ctx;
+    cg_grant_monitor(h->grant, args, out);
+    cg_buf_printf(out, "cogdb: agent level is now %s\n", cg_level_name(cg_hub_agent_level(h)));
+}
+
 static void teardown(cg_hub_t *h)
 {
     cg_ctl_free(h->ctl);
     cg_gdbseat_free(h->seat);
+    cg_grant_free(h->grant);
     cg_recorder_free(h->rec);
     cg_regmap_free(h->regmap);
     cg_target_free(h->target);
@@ -107,7 +120,11 @@ int cg_hub_run(const cg_hub_cfg_t *cfg)
         teardown(h);
         return 1;
     }
-    h->seat = cg_gdbseat_new(h->loop, h->bus, h->target, &cfg->gdb);
+    h->grant = cg_grant_new(h->loop, h->bus);
+    cg_gdbseat_cfg_t scfg = cfg->gdb;
+    scfg.monitor = seat_monitor;
+    scfg.monitor_ctx = h;
+    h->seat = h->grant ? cg_gdbseat_new(h->loop, h->bus, h->target, &scfg) : NULL;
     if (!h->seat) {
         teardown(h);
         return 1;

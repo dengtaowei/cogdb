@@ -26,8 +26,10 @@ The CLI, `cogdb mcp` and outside tools all use it. `HELLO` reports
 
 Before a command runs, the hub checks:
 
-1. **Policy level.** `ERR policy: CMD needs level L, agents have M [while
-   gdb is attached]`.
+1. **Policy level.** `ERR policy: CMD needs level L, agents have M`. When
+   only the gdb cap is in the way, the message adds `while gdb is attached
+   (the gdb user can run: monitor cogdb allow L)`; agents cannot raise
+   their own level.
 2. **Target state.** `ERR stub link is down`, `ERR target running (HALT
    first)`, `ERR target is exited`.
 
@@ -96,7 +98,7 @@ lists everything. With no target description, the reply is `g=<raw hex>`.
 ### STATUS keys
 
 `name stub link state run_owner last_stop gdb gdb_port detach agent_level
-policy queue arch registers packet_size agent_breakpoints events record`
+policy grant queue arch registers packet_size agent_breakpoints events record`
 
 ### Events
 

@@ -183,6 +183,18 @@ class GdbClient:
         self.s.close()
 
 
+def monitor(g, text):
+    """Runs `monitor TEXT` the way gdb does; returns the console text."""
+    g.s.sendall(frame(b"qRcmd," + text.encode().hex().encode()))
+    out = b""
+    while True:
+        p = g.read_packet()
+        if p.startswith(b"O") and p != b"OK":
+            out += bytes.fromhex(p[1:].decode())
+        else:
+            return out.decode()
+
+
 def main(cogdb):
     c = Checker()
     stub_port = free_port()
@@ -242,7 +254,28 @@ def main(cogdb):
         hub.wait_status("gdb", hub.status()["gdb"])
         c.ok(hub.status()["agent_level"] == "halt", "agent level drops while gdb attached")
         r = hub.ctl("STEP")
-        c.ok(r.startswith("ERR policy"), "agent step refused while gdb attached", r)
+        c.ok(r.startswith("ERR policy") and "monitor cogdb allow run" in r,
+             "agent step refused while gdb attached, with the grant hint", r)
+
+        c.ok(hub.ctl("WMEM 0x1010 beef").startswith("ERR policy"), "agent write refused")
+        out = monitor(g, "cogdb allow write 1")
+        c.ok("agents may write" in out and hub.status()["grant"].startswith("write"),
+             "gdb user grants write from a monitor command", out)
+        r = hub.ctl("WMEM 0x1010 beef")
+        c.ok(r.startswith("OK"), "agent write allowed under the grant", r)
+        c.ok(stub.seen.count(b"qRcmd," + b"cogdb allow write 1".hex().encode()) == 0,
+             "monitor cogdb is answered by the hub, not the stub")
+        time.sleep(1.3)
+        c.ok(hub.ctl("WMEM 0x1010 beef").startswith("ERR policy") and
+             hub.status()["grant"] == "-", "grant expires")
+        monitor(g, "cogdb allow run")
+        out = monitor(g, "cogdb revoke")
+        c.ok("revoked" in out and hub.status()["agent_level"] == "halt", "grant revoked", out)
+        out = monitor(g, "cogdb allow read")
+        c.ok("usage" in out and hub.status()["grant"] == "-", "grant of read refused", out)
+        out = monitor(g, "reset halt")
+        c.ok("echo: reset halt" in out, "other monitor commands still reach the stub", out)
+        monitor(g, "cogdb allow write 60")
 
         g.packet(b"c", wait_reply=False)
         out = g.read_packet()
@@ -261,6 +294,7 @@ def main(cogdb):
         c.ok(g.packet(b"D") == b"OK", "detach answered by the hub")
         g.close()
         hub.wait_status("gdb", "-")
+        c.ok(hub.status()["grant"] == "-", "grant ends when gdb detaches")
         hub.wait_status("state", "running")
         c.ok(True, "detach resumes the target (default policy)")
 

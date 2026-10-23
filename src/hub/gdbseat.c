@@ -12,6 +12,7 @@
 
 #include "core/conn.h"
 #include "rsp/rsp.h"
+#include "util/hex.h"
 #include "util/log.h"
 #include "util/sys.h"
 
@@ -133,12 +134,44 @@ static int local_detach(client_t *c, const char *p, size_t n)
     return 1;
 }
 
+static int local_monitor(client_t *c, const char *p, size_t n)
+{
+    cg_gdbseat_t *s = c->seat;
+    if (!s->cfg.monitor || (n - 6) % 2)
+        return 0;
+    size_t len = (n - 6) / 2;
+    char *text = malloc(len + 1);
+    if (!text || cg_hex_decode(p + 6, n - 6, (uint8_t *)text, len) != (long)len) {
+        free(text);
+        return 0;
+    }
+    text[len] = '\0';
+    int ours = strncmp(text, "cogdb", 5) == 0 && (text[5] == '\0' || text[5] == ' ');
+    if (ours) {
+        cg_buf_t out, pkt;
+        cg_buf_init(&out);
+        cg_buf_init(&pkt);
+        s->cfg.monitor(s->cfg.monitor_ctx, text + 5, &out);
+        if (out.len) {
+            cg_buf_putc(&pkt, 'O');
+            cg_hex_encode(&pkt, (const uint8_t *)out.data, out.len);
+            send_packet(c, pkt.data, pkt.len);
+        }
+        send_str(c, "OK");
+        cg_buf_free(&out);
+        cg_buf_free(&pkt);
+    }
+    free(text);
+    return ours;
+}
+
 static const struct {
     const char *prefix;
     int exact;
     local_fn fn;
 } k_local[] = {
     {"QStartNoAckMode", 1, local_noack},
+    {"qRcmd,", 0, local_monitor},
     {"QNonStop:", 0, local_nonstop},
     {"D", 1, local_detach},
     {"D;", 0, local_detach},

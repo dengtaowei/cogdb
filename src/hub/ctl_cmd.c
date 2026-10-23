@@ -226,6 +226,12 @@ static cg_call_rc_t cmd_status(cg_hub_t *h, cg_call_t *call, const char *args)
     cg_buf_printf(out, "agent_level=%s\npolicy=%s/%s\n",
                   cg_level_name(cg_hub_agent_level(h)), cg_level_name(h->cfg.policy.agent),
                   cg_level_name(h->cfg.policy.agent_with_gdb));
+    cg_level_t granted;
+    if (cg_grant_level(h->grant, &granted))
+        cg_buf_printf(out, "grant=%s %us\n", cg_level_name(granted),
+                      cg_grant_remaining_s(h->grant));
+    else
+        cg_buf_puts(out, "grant=-\n");
     cg_buf_printf(out, "queue=%zu\narch=%s\nregisters=%zu\npacket_size=%u\nagent_breakpoints=%d\n",
                   cg_target_queue_len(h->target), td && td->arch[0] ? td->arch : "-",
                   td ? td->n : 0, cg_target_caps(h->target)->packet_size, h->nbps);

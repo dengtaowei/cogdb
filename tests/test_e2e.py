@@ -86,6 +86,22 @@ def main(cogdb):
         c.ok(True, "gdb detach leaves the target running")
         c.ok(hub.status()["agent_level"] == "write", "agent level restored after detach")
 
+        gdb = subprocess.run(
+            ["gdb", "-q", "-nx", "-batch",
+             "-ex", "set sysroot /",
+             "-ex", f"target remote 127.0.0.1:{hub.gdb_port}",
+             "-ex", "monitor cogdb allow write 30",
+             "-ex", "shell sleep 0.3",
+             "-ex", "monitor cogdb status",
+             "-ex", "detach", exe],
+            capture_output=True, text=True, timeout=30)
+        said = gdb.stdout + gdb.stderr
+        c.ok("agents may write for 30s" in said and "agent level is now write" in said
+             and re.search(r"for (29|30)s more", said) is not None,
+             "real gdb shows `monitor cogdb` output", said)
+        hub.wait_status("gdb", "-")
+        c.ok(hub.status()["grant"] == "-", "grant gone after the real gdb detaches")
+
         r = hub.ctl("HALT 3000")
         r2 = hub.ctl(f"MEM {syms['counter']:#x} 8")
         c.ok(r.startswith("OK stopped") and r2.startswith("OK"), "agent alone again", r + r2)

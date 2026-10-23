@@ -150,9 +150,15 @@ static const char *gate(cg_hub_t *h, const cg_cmd_t *cmd, cg_buf_t *why)
 {
     cg_level_t have = cg_hub_agent_level(h);
     if (cmd->level > have) {
-        cg_buf_printf(why, "ERR policy: %s needs level %s, agents have %s%s\n", cmd->name,
-                      cg_level_name(cmd->level), cg_level_name(have),
-                      cg_gdbseat_attached(h->seat) ? " while gdb is attached" : "");
+        if (cg_gdbseat_attached(h->seat) && cmd->level <= h->cfg.policy.agent)
+            cg_buf_printf(why,
+                          "ERR policy: %s needs level %s, agents have %s while gdb is attached"
+                          " (the gdb user can run: monitor cogdb allow %s)\n",
+                          cmd->name, cg_level_name(cmd->level), cg_level_name(have),
+                          cg_level_name(cmd->level));
+        else
+            cg_buf_printf(why, "ERR policy: %s needs level %s, agents have %s\n", cmd->name,
+                          cg_level_name(cmd->level), cg_level_name(have));
         return why->data;
     }
     cg_tstate_t st = cg_target_state(h->target);

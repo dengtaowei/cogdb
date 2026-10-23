@@ -7,6 +7,7 @@
 #include "ctl.h"
 #include "events.h"
 #include "gdbseat.h"
+#include "grant.h"
 #include "hub.h"
 #include "policy.h"
 #include "record.h"
@@ -31,6 +32,7 @@ struct cg_hub {
     cg_target_t *target;
     cg_regmap_t *regmap;
     cg_gdbseat_t *seat;
+    cg_grant_t *grant;
     cg_ctl_t *ctl;
     cg_recorder_t *rec;
     uint64_t link_sub;

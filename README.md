@@ -26,7 +26,9 @@ It is the sibling of couart, which does the same for a UART console.
 - **Transparent seat for gdb.** Packets from gdb are relayed byte-exact,
   so `monitor`, `load`, `vFile`, thread and RTOS packets all work. The hub
   answers only what concerns the gdb↔hub hop: no-ack mode (offered even
-  when a UART stub lacks it), non-stop (refused), and detach/kill.
+  when a UART stub lacks it), non-stop (refused), detach/kill, and
+  `monitor cogdb ...`. Attaching to a running target halts it first, as
+  gdbserver and OpenOCD do.
 - **Agent commands on the same session.** They are queued between gdb's
   packets. A command that needs a halted target says so instead of
   hanging.
@@ -90,6 +92,18 @@ cogdb -n myboard watch                # live event stream
 
 `--agent LEVEL` applies with no gdb attached (default `write`), and
 `--agent-with-gdb LEVEL` while one is (default `halt`).
+
+Only the human can raise that cap, from their own gdb:
+
+```
+(gdb) monitor cogdb allow write 120   # agents may write for 120 s (default 300)
+(gdb) monitor cogdb status
+(gdb) monitor cogdb revoke
+```
+
+The grant ends when it expires, when it is revoked, or when that gdb
+detaches, and never exceeds `--agent`. Other `monitor` commands still go to
+the stub. An agent refused by the cap is told which command to ask for.
 
 ### Detach
 
