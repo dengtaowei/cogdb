@@ -310,6 +310,9 @@ static void on_packet(cg_target_t *t, const char *p, size_t n)
     cg_conn_write(t->conn, &ack, 1);
     if (!t->conn)
         return;
+    /* A stub that accepts and then hangs up must not be retried at the
+     * minimum interval forever; only a stub that talks resets backoff. */
+    t->backoff_ms = 0;
     cg_bus_packet(t->bus, "target", '<', p, n);
 
     req_t *r = t->inflight;
@@ -445,7 +448,10 @@ static int try_connect(cg_target_t *t)
     t->conn = cg_conn_new(t->loop, fd, &k_conn_ops, t);
     if (!t->conn)
         return -1;
-    t->backoff_ms = 0;
+    /* gdb opens every session with a bare ack; XuanTie DebugServer resets
+     * the connection if the first byte it reads is anything else. */
+    if (cg_conn_write(t->conn, "+", 1) != 0)
+        return -1;
     set_state(t, CG_TS_UNKNOWN);
     cg_rsp_dec_reset(&t->dec);
     cg_bus_emitf(t->bus, CG_EV_LINK, "hub", "up %s", t->uri);

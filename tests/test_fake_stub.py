@@ -14,7 +14,8 @@ from harness import Checker, Hub, checksum, frame, free_port  # noqa: E402
 
 
 class FakeStub:
-    """Minimal all-stop stub with 4 KiB of memory at 0x1000."""
+    """Minimal all-stop stub with 4 KiB of memory at 0x1000. Like XuanTie
+    DebugServer it drops a client whose first byte is not '+'."""
 
     def __init__(self, port):
         self.port = port
@@ -26,6 +27,7 @@ class FakeStub:
         self.seen = []
         self.last = b""
         self.naks_seen = 0
+        self.ungreeted = 0
         self.lsock = socket.socket()
         self.lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.lsock.bind(("127.0.0.1", port))
@@ -82,6 +84,7 @@ class FakeStub:
             except OSError:
                 return
             buf = b""
+            first = True
             while True:
                 try:
                     data = self.conn.recv(4096)
@@ -89,6 +92,11 @@ class FakeStub:
                     break
                 if not data:
                     break
+                if first:
+                    first = False
+                    if data[:1] != b"+":
+                        self.ungreeted += 1
+                        break
                 buf += data
                 while buf:
                     if buf[:1] == b"-":
@@ -182,7 +190,7 @@ def main(cogdb):
     hub = Hub(cogdb, f"tcp:127.0.0.1:{stub_port}", extra=("--timeout", "600"))
     try:
         hub.wait_status("state", "stopped")
-        c.ok(True, "link up, initial '?' gives stopped")
+        c.ok(stub.ungreeted == 0, "link opens with a bare '+' (XuanTie DebugServer needs it)")
 
         r = hub.ctl("MEM 0x1000 4")
         c.ok(r.startswith("OK") and "00010203" in r, "stub NAK is answered by retransmit", r)
@@ -273,7 +281,37 @@ def main(cogdb):
         rc = hub.close()
         stub.close()
     c.ok(rc == 0, "hub exits cleanly on SIGTERM", str(rc))
+    check_hangup_backoff(c, cogdb)
     return c.done()
+
+
+def check_hangup_backoff(c, cogdb):
+    """A stub that accepts and hangs up at once must be retried with growing
+    delays, not at the minimum interval forever."""
+    port = free_port()
+    ls = socket.socket()
+    ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ls.bind(("127.0.0.1", port))
+    ls.listen(8)
+    accepts = []
+
+    def serve():
+        while True:
+            try:
+                conn, _ = ls.accept()
+            except OSError:
+                return
+            accepts.append(time.time())
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    hub = Hub(cogdb, f"127.0.0.1:{port}", name="hangup")
+    time.sleep(3.0)
+    hub.close()
+    ls.close()
+    # 250+500+1000 ms of backoff fits about 4 attempts in 3 s; a fixed 250 ms
+    # retry would make about 12.
+    c.ok(2 <= len(accepts) <= 6, "hang-up stub is retried with backoff", str(len(accepts)))
 
 
 if __name__ == "__main__":
